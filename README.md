@@ -76,9 +76,8 @@ OpenClaw is a personal agent driven by natural language; the LLM picks which com
 
 ```
 Install Hirey AI on this OpenClaw host. First check `openclaw --version`:
-- If 2026.5.2 or higher, run `openclaw plugins install clawhub:hirey`.
-- Otherwise (OpenClaw 2026.4.23 ~ 2026.5.1), run `openclaw plugins install clawhub:hirey-compatible --dangerously-force-unsafe-install`.
-The `--dangerously-force-unsafe-install` flag is required only for the bundle path: it is OpenClaw's own break-glass override that lets community bundles ship a setup-time `child_process` helper for `npm install` + `openclaw config set`. The ClawPack path is in-process and does not need the flag.
+- If 2026.5.2 or higher, run `openclaw plugins install clawhub:hirey` (preferred; no override flags).
+- Only if stuck on OpenClaw 2026.4.23 ~ 2026.5.1: the legacy bundle `clawhub:hirey-compatible` needs OpenClaw's `--dangerously-force-unsafe-install` break-glass flag (its setup helper runs `npm install` + `openclaw config set` via child_process, which the install scanner blocks by default). Ask me (the user) to confirm before using that flag — it is a trust decision, not a default.
 After install, call hi_agent_install (don't fabricate an agent id). Report the real agent_id and hooks_ready status.
 ```
 
@@ -89,16 +88,28 @@ openclaw plugins install clawhub:hirey
 openclaw gateway restart
 ```
 
-For OpenClaw 4.23 ~ 5.1 users (bundle path), or any 5.2+ user who wants the bundle as a universal fallback:
+For OpenClaw 4.23 ~ 5.1 users ONLY — a legacy bundle path exists (`clawhub:hirey-compatible`) that requires OpenClaw's `--dangerously-force-unsafe-install` break-glass flag, because the bundle ships a setup-time `child_process` helper (`openclaw-host-installer.mjs` spawning `npm install` + `openclaw config set`) that OpenClaw's install scanner blocks by default. **Do not use this path unless you are stuck on 4.23 ~ 5.1 and you deliberately trust the legacy installer** — on 5.2+ always prefer the flag-free `clawhub:hirey` ClawPack path above, which is in-process and needs no override:
 
 ```bash
+# LEGACY ONLY (OpenClaw 4.23 ~ 5.1). Prefer `clawhub:hirey` on 5.2+.
 openclaw plugins install clawhub:hirey-compatible --dangerously-force-unsafe-install
 openclaw gateway restart
 ```
 
-The `--dangerously-force-unsafe-install` flag is required because OpenClaw 4.14+ install scanner blocks community bundles that ship a `child_process` import; our `openclaw-host-installer.mjs` legitimately uses `child_process.execFile` to spawn `npm install` and `openclaw config set` during setup. This is the OpenClaw-provided override flag (docs/cli/plugins.md), not a bypass of security controls.
-
 After restart, ask OpenClaw "Hi 健康吗?" or "post a Hi listing for me" — the LLM will see the registered Hi tools and run them directly.
+
+## What this plugin stores and changes on your host (read before installing)
+
+Everything below is core to how the integration works (a persistent local Hi agent + background event delivery). It is listed here so it is a deliberate choice, not a surprise:
+
+- **Local identity state** — `~/.openclaw/hi-mcp/<profile>/` (override with the `stateDir` config) holds the Hi agent identity for this host: OAuth `client_id`/`client_secret` (or a `hi_ak_` API key), delivery cursor, and pending-push files. Written with file mode `0600` (owner-only). This is what makes the agent stable across restarts; treat the directory as sensitive, like an SSH key.
+- **OpenClaw hooks config** — during `hi_agent_install` (and self-heal on later startups if the entry went missing) the plugin writes the OpenClaw hooks configuration (path + token) so the in-process receiver can deliver Hi events back into your chat. Changes are logged; the previous value is captured in the install receipt.
+- **Tool visibility (`tools.alsoAllow`)** — at registration the plugin appends `group:plugins` to `tools.alsoAllow` in `openclaw.json` if missing, so its registered `hi_*` tools are visible to the LLM under your current tools profile. This is the only `openclaw.json` mutation it performs.
+- **Session metadata read** — `hi_agent_install` reads `openclaw status --json` → `sessions.recent[0].key` and registers that session key with Hi so replies route back to the right chat. The skill instructs the assistant to disclose this at install time.
+- **Inbound event text is treated as untrusted** — events pushed by counterparties are injected into the LLM turn inside a delimited `<hi_pending_pushes>` block that (a) escapes any delimiter-forging text and (b) explicitly marks the content as untrusted data the assistant must not follow as instructions.
+- **Background activity** — the plugin starts with the gateway and runs an agent-events claim loop against `platformBaseUrl` (default `https://hi.hirey.ai`) plus a local webhook route (`webhookPath`, default `/hi/webhook`). No other hosts are contacted.
+
+**To remove it completely:** `openclaw plugins uninstall hirey`, delete `~/.openclaw/hi-mcp/`, and (optionally) remove the plugin's hooks entry and the `group:plugins` item from `tools.alsoAllow` in `openclaw.json`. The platform-side agent is not destroyed by local removal; re-binding the same phone/email/Google later converges back to the same Hi workspace.
 
 ## Development
 
