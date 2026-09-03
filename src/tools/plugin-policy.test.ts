@@ -6,8 +6,10 @@ import { fetchPluginReleasePolicy } from '../clients.js';
 test('OpenClaw reports its host and installed version when reading release policy', async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | null = null;
+  let observedSignal: AbortSignal | null = null;
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
     observedHeaders = new Headers(init?.headers);
+    observedSignal = init?.signal as AbortSignal | null;
     return new Response(JSON.stringify({
       _meta: {
         hirey_plugin: {
@@ -23,8 +25,23 @@ test('OpenClaw reports its host and installed version when reading release polic
     const policy = await fetchPluginReleasePolicy('https://hi.hirey.ai/');
     assert.equal(observedHeaders?.get('x-hirey-plugin-host'), 'openclaw');
     assert.equal(observedHeaders?.get('x-hirey-plugin-version'), '1.0.74');
+    assert.ok(observedSignal instanceof AbortSignal);
     assert.equal(policy?.host, 'openclaw');
     assert.equal(policy?.update_required, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('OpenClaw release policy lookup has a bounded timeout', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+  })) as typeof fetch;
+  try {
+    await assert.rejects(fetchPluginReleasePolicy('https://hi.hirey.ai/', 5), (error: any) => {
+      return error?.name === 'TimeoutError';
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }
