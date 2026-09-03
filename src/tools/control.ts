@@ -16,6 +16,7 @@ import {
 import {
   buildAuthorizedClients,
   ensureCredential,
+  fetchPluginReleasePolicy,
   loadStateWithQuarantine,
   peekQuarantineNotice,
 } from '../clients.js';
@@ -131,10 +132,24 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
       const args = (params || {}) as { include_remote?: boolean };
       try {
         const state = await loadStateWithQuarantine(stateDir, config.profile, config.platformBaseUrl);
+        let pluginPolicy: Record<string, unknown> | null = null;
+        try {
+          pluginPolicy = await fetchPluginReleasePolicy(config.platformBaseUrl);
+        } catch (err: any) {
+          pluginPolicy = {
+            host: 'openclaw',
+            latest: null,
+            minimum_supported: null,
+            update_required: null,
+            update_recommended: null,
+            error: String(err?.message || err),
+          };
+        }
         const summary = {
           ok: true,
           plugin: 'hi-openclaw-plugin',
           plugin_version: PLUGIN_VERSION,
+          plugin_policy: pluginPolicy,
           profile: config.profile,
           state_dir: stateDir,
           state_file: resolveStateFile(stateDir, config.profile),

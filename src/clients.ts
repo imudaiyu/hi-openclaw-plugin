@@ -32,6 +32,34 @@ export type HiAuthorizedClients = {
   quarantined: StaleIdentityQuarantine | null;
 };
 
+export type HiPluginReleasePolicy = {
+  host?: string;
+  name?: string;
+  latest?: string;
+  minimum_supported?: string;
+  update_required?: boolean | null;
+  update_recommended?: boolean | null;
+  update_command?: string;
+  restart_required?: boolean;
+};
+
+export async function fetchPluginReleasePolicy(
+  platformBaseUrl: string,
+): Promise<HiPluginReleasePolicy | null> {
+  const url = `${platformBaseUrl.replace(/\/+$/, '')}/v1/capabilities`;
+  const response = await fetch(url, {
+    headers: {
+      accept: 'application/json',
+      'x-hirey-plugin-host': 'openclaw',
+      'x-hirey-plugin-version': PLUGIN_VERSION,
+    },
+  });
+  if (!response.ok) throw new Error(`hi_plugin_policy_http_${response.status}`);
+  const body = await response.json() as any;
+  const policy = body?._meta?.hirey_plugin;
+  return policy && typeof policy === 'object' && !Array.isArray(policy) ? policy : null;
+}
+
 // 模块级 quarantine 通知：reactive 触发之后挂一个 in-memory flag，让后续 tool response
 // 都能 surface 一次（直到 plugin restart 自然清掉）。
 let _lastQuarantineNotice: StaleIdentityQuarantine | null = null;
