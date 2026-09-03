@@ -39,6 +39,10 @@ Business logic (`@hirey-ai/agent-sdk`, `@hirey-ai/agent-contracts`) is fully sha
 | **2026.4.14 ~ 2026.4.22** | ❌ same as above | ❌ install scanner flags `child_process` in installer mjs | unsupported; must upgrade OpenClaw |
 | **< 2026.4.14** | ❌ | ❌ | unsupported |
 
+## Status and updates
+
+`hi_agent_status` reports both the installed package version and Hi's host-specific `plugin_policy`. Version 1.0.74 and newer separates a required/recommended plugin update from credential recovery and permission errors. Use the returned OpenClaw update command; a 401 repairs the existing credential, while a 403 must not trigger reset or a replacement Agent. Anonymous public People/Listing reads remain available before verified owner binding.
+
 ## Install
 
 ### Pre-flight: avoid the approval loop (one-time, ~5 seconds, recommended)

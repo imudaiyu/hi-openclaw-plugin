@@ -16,6 +16,7 @@ import {
 import {
   buildAuthorizedClients,
   ensureCredential,
+  fetchPluginReleasePolicy,
   loadStateWithQuarantine,
   peekQuarantineNotice,
 } from '../clients.js';
@@ -131,10 +132,24 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
       const args = (params || {}) as { include_remote?: boolean };
       try {
         const state = await loadStateWithQuarantine(stateDir, config.profile, config.platformBaseUrl);
+        let pluginPolicy: Record<string, unknown> | null = null;
+        try {
+          pluginPolicy = await fetchPluginReleasePolicy(config.platformBaseUrl);
+        } catch (err: any) {
+          pluginPolicy = {
+            host: 'openclaw',
+            latest: null,
+            minimum_supported: null,
+            update_required: null,
+            update_recommended: null,
+            error: String(err?.message || err),
+          };
+        }
         const summary = {
           ok: true,
           plugin: 'hi-openclaw-plugin',
           plugin_version: PLUGIN_VERSION,
+          plugin_policy: pluginPolicy,
           profile: config.profile,
           state_dir: stateDir,
           state_file: resolveStateFile(stateDir, config.profile),
@@ -146,6 +161,7 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
             // registered = 本机已有稳定 agent（register-once）。注意：registered≠identity-bound——
             // agent 可能还没绑手机/邮箱/Google（写操作会被平台 gate 挡住），但读/搜索已可用。
             registered: !!(state.identity && state.identity.agent_id),
+            ready_for_public_reads: !!state.identity,
             activated: !!state.identity?.activated_at,
             agent_id: state.identity?.agent_id || null,
             installation_id: state.identity?.installation_id || null,
@@ -184,7 +200,7 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
     name: 'hi_agent_install',
     label: 'Hi agent setup',
     description:
-      'AGENT-side setup step on the Hi platform. Ensures this OpenClaw host has ONE STABLE agent + credential (register-once) and activates + wires push for it. The credential is persisted locally and REUSED forever — restart / new window / repeated calls all map to the SAME agent_id (no duplicate-agent churn; that churn was the old bug). After it returns, reading & searching Hi (people, listings, taxonomy) work immediately. The agent starts UNBOUND (no verified identity): WRITING — creating/editing a profile, posting a listing, contacting anyone, scheduling — is gated by the platform and requires the user to bind an identity first, default Google (google_link) or phone (phone_binding) or email (email_binding). A `phone_binding_required` / `needs_binding` error on a write means exactly this: bind once, then retry the write — binding attaches to the SAME agent (no new agent). Fully idempotent. NOTE: structurally different from `openclaw plugins install clawhub:hirey` (the CLI that lays the plugin tarball on disk + registers it with the gateway). The CLI install puts hi_* tools on the gateway; THIS tool sets up the Hi-platform agent so those tools work. Always report the REAL agent_id returned by this tool; never fabricate one. If you cannot see this tool in your run inventory yet, the install just completed — wait for the user\'s next message.',
+      'AGENT-side setup step on the Hi platform. Ensures this OpenClaw host has ONE STABLE agent + credential (register-once) and wires push for it. The credential is persisted locally and REUSED forever — restart / new window / repeated calls all map to the SAME agent_id (no duplicate-agent churn; that churn was the old bug). After it returns, reading & searching Hi (people, listings, taxonomy) work immediately even while the installation is pending. The agent starts UNBOUND (no verified identity): WRITING — creating/editing a profile, posting a listing, contacting anyone, scheduling — is gated by the platform and requires the user to bind an identity first, default Google (google_link) or phone (phone_binding) or email (email_binding). A `phone_binding_required` / `needs_binding` error on a write means exactly this: bind once, then retry the write — binding attaches to the SAME agent (no new agent). Fully idempotent. NOTE: structurally different from `openclaw plugins install clawhub:hirey` (the CLI that lays the plugin tarball on disk + registers it with the gateway). The CLI install puts hi_* tools on the gateway; THIS tool sets up the Hi-platform agent so those tools work. Always report the REAL agent_id returned by this tool; never fabricate one. If you cannot see this tool in your run inventory yet, the install just completed — wait for the user\'s next message.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -223,7 +239,7 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
       };
       try {
         // Step 1: ensure a STABLE agent (register-once) — 绝不重注册。已有 identity → 复用；没有
-        // → 注册一次并 activate（openclaw 直连平台，read/search 需要已注册的 runtime agent_id）。
+        // → 注册一次（pending Agent 已可公开 read/search，不调用已下线的 activate 路径）。
         // 这是零 churn 的根：旧逻辑在 state 缺失 / OAuth 抖动 quarantine 时反复 register 新 agent，
         // 每次都多一个孤儿。注册出来的 agent **未绑定身份**：读/搜索放行，写被平台 gate 挡到绑定为止。
         // display_name 解析：caller 显式传 > workspace/IDENTITY.md 的 Name > 'OpenClaw Hi Agent'。
@@ -243,7 +259,7 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
         // Step 2: build authorized clients（client_credentials 换 token）。
         const auth = await buildAuthorizedClients({ stateDir, profile: config.profile, platformBaseUrl: config.platformBaseUrl });
 
-        // Step 3: 读回 remote canonical agent_id（ensureCredential 已 register+activate，这里应有值）。
+        // Step 3: 读回 remote canonical agent_id（ensureCredential 已 register，这里应有值）。
         let me: any = null;
         try { me = await auth.gateway.me(); } catch { me = null; }
         const registeredAgentId = String(me?.agent?.agent_id || state.identity?.agent_id || '').trim();
@@ -276,22 +292,6 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
               }
             : cur.identity,
         }));
-
-        // Step 3b: activate (idempotent)
-        let activateResp: any = null;
-        if (!state.identity?.activated_at) {
-          try {
-            activateResp = await auth.gateway.activate({});
-            state = await updateState(stateDir, config.profile, (cur) => ({
-              ...cur,
-              identity: cur.identity
-                ? { ...cur.identity, activated_at: activateResp.installation?.activated_at ?? new Date().toISOString() }
-                : cur.identity,
-            }));
-          } catch {
-            // fail-soft：activate 失败不阻断 finalize（delivery/hooks 仍尝试，下次调用补激活）。
-          }
-        }
 
         // Step 4: declare delivery capabilities + bind session
         // Native plugin 跑在用户本机的 OpenClaw gateway 进程内，daemon 主动从平台 SSE / claim
@@ -440,10 +440,10 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
           | (BootstrapOnboardingPayload & { recent_activity_error?: string })
           | null = null;
         try {
-          // 仅在 install 主链没出错且 hooks 配好时跑 welcome：identity 没建好 / installation
-          // 还没激活时调 capability 必然 401/403，没意义且会污染 install result。
+          // 仅在 install 主链没出错且 hooks 配好时跑 welcome。pending Agent 已可调用
+          // 匿名公开 browse_recent；身份绑定只在私人读取或写入时需要。
           const installOk = !installationUpdateError && !hooksConfigureError;
-          if (installOk && state.identity?.activated_at) {
+          if (installOk) {
             let recentActivity: RecentActivityItem[] = [];
             let recentActivityError: string | null = null;
             try {
@@ -491,7 +491,7 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
           profile: config.profile,
           state_dir: stateDir,
           quarantined_stale_identity: peekQuarantineNotice(),
-          activate: activateResp,
+          ready_for_public_reads: true,
           installation: installationUpdate,
           installation_update_error: installationUpdateError,
           subscriptions: subscriptionsResp,
@@ -524,6 +524,7 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
             agent_id: state.identity?.agent_id,
             installation_id: state.identity?.installation_id,
             connected: true,
+            ready_for_public_reads: true,
             activated: !!state.identity?.activated_at,
             event_path: 'plugin_native_hooks_loopback',
             installation_update_succeeded: !installationUpdateError,
@@ -589,7 +590,7 @@ export function buildHiAgentDoctorTool(config: Required<HiOpenClawPluginConfig>)
         const auth = await buildAuthorizedClients({ stateDir, profile: config.profile, platformBaseUrl: config.platformBaseUrl });
         const installation = await auth.gateway.getInstallation();
         const activated = !!installation.installation?.activated_at;
-        if (!activated) blockers.push('not_activated');
+        if (!activated) warnings.push('pending_installation_public_reads_only');
 
         let me: any = null;
         let endpoints: any = null;
@@ -676,6 +677,7 @@ export function buildHiAgentDoctorTool(config: Required<HiOpenClawPluginConfig>)
           state_dir: stateDir,
           quarantined_stale_identity: peekQuarantineNotice(),
           connected: true,
+          ready_for_public_reads: true,
           activated,
           push_ready: pushReady,
           blockers, warnings,

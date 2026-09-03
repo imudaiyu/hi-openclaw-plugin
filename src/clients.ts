@@ -32,6 +32,38 @@ export type HiAuthorizedClients = {
   quarantined: StaleIdentityQuarantine | null;
 };
 
+export type HiPluginReleasePolicy = {
+  host?: string;
+  name?: string;
+  latest?: string;
+  minimum_supported?: string;
+  update_required?: boolean | null;
+  update_recommended?: boolean | null;
+  update_command?: string;
+  restart_required?: boolean;
+};
+
+const PLUGIN_POLICY_TIMEOUT_MS = 5_000;
+
+export async function fetchPluginReleasePolicy(
+  platformBaseUrl: string,
+  timeoutMs: number = PLUGIN_POLICY_TIMEOUT_MS,
+): Promise<HiPluginReleasePolicy | null> {
+  const url = `${platformBaseUrl.replace(/\/+$/, '')}/v1/capabilities`;
+  const response = await fetch(url, {
+    headers: {
+      accept: 'application/json',
+      'x-hirey-plugin-host': 'openclaw',
+      'x-hirey-plugin-version': PLUGIN_VERSION,
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`hi_plugin_policy_http_${response.status}`);
+  const body = await response.json() as any;
+  const policy = body?._meta?.hirey_plugin;
+  return policy && typeof policy === 'object' && !Array.isArray(policy) ? policy : null;
+}
+
 // 模块级 quarantine 通知：reactive 触发之后挂一个 in-memory flag，让后续 tool response
 // 都能 surface 一次（直到 plugin restart 自然清掉）。
 let _lastQuarantineNotice: StaleIdentityQuarantine | null = null;
@@ -84,8 +116,9 @@ const _ensureInflight = new Map<string, Promise<HiPersistedState>>();
 //
 // 没有 identity → 注册一个稳定 agent（register-once）。openclaw 是 native plugin、直连
 // 平台/gateway（不像 codex 走 mcp.hirey.ai/mcp edge 懒加载 agent），read/search 必须有一个
-// 已注册 agent（browse_recent/search 要 runtime agent_id），所以这里注册一次并 activate，让
-// 读/搜索立刻可用。注册出来的 agent **未绑定身份**（没有 owner_customer_id/手机）：读/搜索
+// 已注册 agent（browse_recent/search 要 runtime agent_id），所以这里注册一次。pending Agent
+// 已可用于公开读/搜索；不再调用已下线的 activate 路径。注册出来的 agent **未绑定身份**
+//（没有 owner_customer_id/手机）：读/搜索
 // 放行，写操作被平台 phone_binding_required gate 挡住，直到用户绑 Google/手机/邮箱——绑定
 // 通过 dual-anchor 收敛到用户工作区，**同一个 agent 复用**。displayName/metadata 透传给 register
 // （metadata 典型用于邀请落地页的 channel_code 渠道归因）。
@@ -137,7 +170,7 @@ export async function ensureCredential(args: {
       anonymous: false,
       api_key: null,
     };
-    let next = await updateState(args.stateDir, args.profile, (cur) => ({
+    const next = await updateState(args.stateDir, args.profile, (cur) => ({
       ...cur,
       platform: {
         platform_base_url: args.platformBaseUrl,
@@ -146,26 +179,6 @@ export async function ensureCredential(args: {
       },
       identity,
     }));
-    // activate（idempotent）让 agent 立刻可用于 read/search。直接用刚拿到的凭证换 token + activate，
-    // 不走 buildAuthorizedClients（避免与本函数互相递归）。fail-soft：activate 失败不阻断、也
-    // **绝不**因此重注册——下次 hi_agent_install 会补激活。
-    try {
-      const token = await exchangeHiAgentClientCredentialsToken({
-        tokenUrl: identity.token_url,
-        clientId: identity.client_id,
-        clientSecret: identity.client_secret,
-      });
-      const clients = await createHiAgentClients({ platformBaseUrl: args.platformBaseUrl, token: token.access_token });
-      const act: any = await clients.gateway.activate({});
-      next = await updateState(args.stateDir, args.profile, (cur) => ({
-        ...cur,
-        identity: cur.identity
-          ? { ...cur.identity, activated_at: act?.installation?.activated_at ?? new Date().toISOString() }
-          : cur.identity,
-      }));
-    } catch {
-      // activate fail-soft
-    }
     console.log(JSON.stringify({ event: 'hi_openclaw_agent_registered', profile: args.profile, agent_id: identity.agent_id }));
     return next;
   })().finally(() => { _ensureInflight.delete(lockKey); });
