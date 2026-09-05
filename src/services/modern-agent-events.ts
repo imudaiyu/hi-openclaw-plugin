@@ -105,7 +105,12 @@ export async function runModernEventReceiver(options: ModernEventReceiverOptions
           }
           // Never launch a hook outside its lease. Gateway has no renew API.
           const remaining = Date.parse(event.lease_expires_at) - Date.now() - 5_000;
-          if (remaining > 0 && !options.signal.aborted) {
+          if (remaining <= 0) {
+            // The claim response is structurally valid but can no longer be used. A new
+            // idempotency key is required on the next cycle; reusing the old key can make the
+            // gateway replay this same expired lease forever.
+            claimKey = randomUUID();
+          } else if (!options.signal.aborted) {
             let delivered = receipts.has(event.event_id);
             if (!delivered) {
               try {

@@ -110,6 +110,31 @@ test('expired and malformed leases do not start hooks or ACK', async () => {
   }
 });
 
+test('expired valid lease rotates claim key and the next cycle can recover', async () => {
+  const abort = new AbortController();
+  const keys: string[] = [];
+  let ticks = 0, hooks = 0, acks = 0;
+  await runModernEventReceiver({ platformBaseUrl: 'https://example.test', signal: abort.signal,
+    ready: async () => ({ token: 'test' }),
+    fetch: async (url, init) => {
+      const body = JSON.parse(init!.body as string);
+      if (String(url).endsWith('/claim')) {
+        keys.push(body.idempotency_key);
+        return reply({ event: { ...event(), lease_expires_at: keys.length === 1
+          ? new Date(0).toISOString() : new Date(Date.now() + 60_000).toISOString() } });
+      }
+      acks++;
+      return reply({ event_id: 'agev_test', status: 'acked' });
+    },
+    deliver: async () => { hooks++; return true; },
+    wait: async () => { if (++ticks === 2) abort.abort(); },
+  });
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(hooks, 1);
+  assert.equal(acks, 1);
+});
+
 test('malformed successful claim response fails closed without waking hooks', async () => {
   for (const payload of [{}, { result: {} }, { result: { event: {} } }]) {
     const abort = new AbortController(); let errors = 0;
