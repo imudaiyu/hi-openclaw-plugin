@@ -21,15 +21,21 @@ import {
 } from '../clients.js';
 import {
   resolveStateDir,
+  resolveOpenClawStateRoot,
   resolveStateFile,
   updateState,
 } from '../state.js';
-import { ensureOpenClawHooksConfigured, ensurePluginToolsAlsoAllowed, readGatewayPort, findRecentUserSessionKey } from '../utils/openclaw-config.js';
+import {
+  ensureOpenClawHooksConfigured,
+  ensurePluginToolsAlsoAllowed,
+  findRecentUserSessionKey,
+  readGatewayPort,
+  resolveOpenClawConfigPath,
+} from '../utils/openclaw-config.js';
 import { buildErrorDetailFields } from '../utils/error-detail.js';
 import { PLUGIN_VERSION } from '../version.js';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 function defaultStateDir(config: Required<HiOpenClawPluginConfig>): string {
@@ -44,14 +50,14 @@ function resolveOpenClawWorkspaceDir(): string {
   // try openclaw.json
   try {
     const cfg = JSON.parse(
-      fsSync.readFileSync(path.join(os.homedir(), '.openclaw', 'openclaw.json'), 'utf8'),
+      fsSync.readFileSync(resolveOpenClawConfigPath(), 'utf8'),
     );
     const wd = cfg?.agents?.defaults?.workspace;
     if (typeof wd === 'string' && wd.trim()) return wd.trim();
   } catch {
     // file missing / parse error / ...：都没所谓，用约定默认
   }
-  return path.join(os.homedir(), '.openclaw', 'workspace');
+  return path.join(resolveOpenClawStateRoot(), 'workspace');
 }
 
 // OpenClaw 的"它叫什么名字"在 workspace/IDENTITY.md。SOUL.md 协议要求 LLM 每个 session
