@@ -34,6 +34,26 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "modernEvents": {
+        "type": "object",
+        "additionalProperties": false,
+        "default": {},
+        "description": "Opt-in modern Gateway event receiver. Requires existing local hooks configuration and an explicitly selected destination; never enabled by installation or upgrade.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "channel": {
+            "type": "string",
+            "description": "Explicit local OpenClaw delivery channel."
+          },
+          "to": {
+            "type": "string",
+            "description": "Explicit recipient on that channel; event payloads cannot override it."
+          }
+        }
+      },
       "platformBaseUrl": {
         "type": "string",
         "description": "Hirey Hi platform base URL. Defaults to the Hirey AI public service.",

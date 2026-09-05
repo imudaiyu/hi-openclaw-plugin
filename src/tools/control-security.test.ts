@@ -24,6 +24,7 @@ test('local status excludes persisted credentials from both result formats and d
     state.runtime.install.receiver_last_error = 'failure with FAKE_API_KEY';
     await writeState(dir, 'test', state);
     const tool = buildHiAgentStatusTool({
+      modernEvents: {},
       stateDir: dir, profile: 'test', platformBaseUrl: 'https://status-fixture.invalid',
       webhookPath: '/hi', claimPollIntervalMs: 30_000, claimLeaseMs: 30_000,
     });

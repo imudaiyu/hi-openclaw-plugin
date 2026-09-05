@@ -10,8 +10,8 @@
 import {
   createHiAgentClients,
   exchangeHiAgentClientCredentialsToken,
-  type HiAgentGatewayClient,
-  type HiAgentPlatformClient,
+  HiAgentGatewayClient,
+  HiAgentPlatformClient,
   type HiAgentPlatformWellKnown,
 } from '@hirey/hi-agent-sdk';
 import {
@@ -235,7 +235,7 @@ export async function buildAuthorizedClients(args: {stateDir: string; profile: s
     entry = {}; authorizedCache.set(key, entry);
   }
   const current = entry;
-  current.pending = buildAuthorizedClientsUncached(args).then(value => {current.value = value; return value;})
+  current.pending = buildAuthorizedClientsUncached(args, state).then(value => {current.value = value; return value;})
     .finally(() => {current.pending = undefined;});
   return current.pending;
 }
@@ -244,22 +244,34 @@ async function buildAuthorizedClientsUncached(args: {
   stateDir: string;
   profile: string;
   platformBaseUrl: string;
-}): Promise<HiAuthorizedClients> {
+}, state: HiPersistedState): Promise<HiAuthorizedClients> {
   // 没有 identity 时不再 throw hi_identity_missing，而是 register-once 一个稳定 agent —— 这样
   // "装好插件直接搜索"就能用；register-once + 复用 = 零 churn。
-  const state = await ensureCredential(args);
   if (!state.identity) {
     throw new Error('hi_identity_unavailable: agent registration failed; retry hi_agent_status');
   }
+  const contextualFetch: typeof fetch = async (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set('x-hirey-plugin-host', 'openclaw');
+    headers.set('x-hirey-plugin-version', PLUGIN_VERSION);
+    const response = await fetch(input, {...init, headers, signal: init?.signal || AbortSignal.timeout(15_000)});
+    if (response.status === 401) invalidateAuthorizedClients(args.stateDir, args.profile);
+    return response;
+  };
+  // Discovery is public and independent of OAuth. Do not send a bearer to the
+  // discovery host, and do not serialize two network round trips on cold start.
+  const discovery = createHiAgentClients({platformBaseUrl: args.platformBaseUrl, token: '', fetchImpl: contextualFetch});
   let token;
+  let discovered;
+  let tokenReceivedAt = 0;
   try {
     const deadline = AbortSignal.timeout(15_000);
-    token = await exchangeHiAgentClientCredentialsToken({
+    [token, discovered] = await Promise.all([exchangeHiAgentClientCredentialsToken({
       tokenUrl: state.identity.token_url,
       clientId: state.identity.client_id,
       clientSecret: state.identity.client_secret,
-      fetchImpl: (input, init) => fetch(input, {...init, signal: deadline}),
-    });
+      fetchImpl: (input, init) => contextualFetch(input, {...init, signal: deadline}),
+    }).then(value => {tokenReceivedAt = Date.now(); return value;}), discovery]);
   } catch (err) {
     // 关键反 churn 改动：OAuth 失败**不再 auto-quarantine + 重注册**（那正是 openclaw 满天飞
     // 孤儿 agent 的根因——一次抖动/吊销就换一个新 agent）。保留本地凭证、抛清晰错误：让用户
@@ -273,24 +285,20 @@ async function buildAuthorizedClientsUncached(args: {
     }
     throw err;
   }
-  const clients = await createHiAgentClients({
-    platformBaseUrl: args.platformBaseUrl,
-    token: token.access_token,
-    fetchImpl: (input, init) => {
-      const headers = new Headers(init?.headers);
-      headers.set('x-hirey-plugin-host', 'openclaw');
-      headers.set('x-hirey-plugin-version', PLUGIN_VERSION);
-      return fetch(input, {...init, headers, signal: AbortSignal.timeout(15_000)});
-    },
-  });
+  const wellKnown = discovered.wellKnown;
+  const clientOptions = {token: token.access_token, fetchImpl: contextualFetch};
+  const platform = new HiAgentPlatformClient({...clientOptions,
+    baseUrl: String(wellKnown?.platform?.platform_base_url || '').trim() || args.platformBaseUrl});
+  const gateway = new HiAgentGatewayClient({...clientOptions,
+    baseUrl: String(wellKnown?.platform?.registry_base_url || '').trim() || args.platformBaseUrl});
   return {
     state,
     accessToken: token.access_token,
-    gateway: clients.gateway,
-    platform: clients.platform,
-    wellKnown: clients.wellKnown,
+    gateway,
+    platform,
+    wellKnown,
     quarantined: peekQuarantineNotice(),
-    expiresAt: Date.now() + Math.min(token.access_token.startsWith('hi_ai_') ? 10_000 : 60_000,
+    expiresAt: tokenReceivedAt + Math.min(token.access_token.startsWith('hi_ai_') ? 10_000 : 60_000,
       Math.max(0, Number(token.expires_in || 0) * 1000 - 30_000)),
   };
 }

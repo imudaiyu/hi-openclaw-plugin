@@ -70,7 +70,7 @@ test('same credential transitions pending to flat active identity without legacy
     throw new Error(`unexpected endpoint ${route}`);
   };
   try {
-    const config={stateDir,profile:'test',platformBaseUrl:'https://platform.test',webhookPath:'/hi',claimPollIntervalMs:30000,claimLeaseMs:30000};
+    const config={modernEvents:{},stateDir,profile:'test',platformBaseUrl:'https://platform.test',webhookPath:'/hi',claimPollIntervalMs:30000,claimLeaseMs:30000};
     const install=buildHiAgentInstallTool(config);
     const pending=(await install.execute('test',{})).structuredContent as any;
     assert.equal(pending.ok,true);assert.equal(pending.activated,false);assert.equal(pending.hooks_ready,false);

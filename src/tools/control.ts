@@ -155,12 +155,14 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
       const args = (params || {}) as { include_remote?: boolean };
       try {
         const state = await loadStateWithQuarantine(stateDir, config.profile, config.platformBaseUrl);
-        const pluginPolicy = await getStatusPluginReleasePolicy(config.platformBaseUrl, !!args.include_remote);
+        // Policy and identity are independent remote reads. Start the bounded
+        // policy check now, but do not delay OAuth/discovery or the real /me.
+        const pluginPolicy = getStatusPluginReleasePolicy(config.platformBaseUrl, !!args.include_remote);
         const summary = {
           ok: true,
           plugin: 'hi-openclaw-plugin',
           plugin_version: PLUGIN_VERSION,
-          plugin_policy: pluginPolicy,
+          plugin_policy: null as Record<string, unknown> | null,
           profile: config.profile,
           state_dir: stateDir,
           state_file: resolveStateFile(stateDir, config.profile),
@@ -202,20 +204,25 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
           },
           remote: null as Record<string, unknown> | null,
         };
+        const finish = async () => {
+          summary.plugin_policy = await pluginPolicy;
+          return asJsonResult(summary);
+        };
         if (args.include_remote && state.identity) {
           try {
             const auth = await buildAuthorizedClients({
               stateDir, profile: config.profile, platformBaseUrl: config.platformBaseUrl,
             });
             if (auth.accessToken.startsWith('hi_ai_')) {
+              summary.summary.activated = false;
               summary.remote = {authenticated: true, status: 'pending', ready_for_public_reads: true, identity_bound: false};
-              return asJsonResult(summary);
+              return finish();
             }
             if (state.identity.api_key) {
               const me = await auth.gateway.me() as any;
               summary.remote = {me};
               summary.summary.activated = isVerifiedModernIdentity(me, state.identity.agent_id);
-              return asJsonResult(summary);
+              return finish();
             }
             const [me, installation, endpoints, subscriptions] = await Promise.all([
               auth.gateway.me(),
@@ -225,10 +232,11 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
             ]);
             summary.remote = { me, installation, endpoints, subscriptions };
           } catch (err: any) {
+            summary.summary.activated = false;
             summary.remote = { error: String(err?.message || err) };
           }
         }
-        return asJsonResult(summary);
+        return finish();
       } catch (err: any) {
         return asErrorResult('hi_agent_status_failed', buildErrorDetailFields(err));
       }

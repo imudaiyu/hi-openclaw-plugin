@@ -42,6 +42,12 @@ export function isOpenClawPluginInstallCommand(argv: string[] = process.argv): b
 
 function defaultedConfig(raw: HiOpenClawPluginConfig | undefined): Required<HiOpenClawPluginConfig> {
   return {
+    // Opt-in only. Installing/upgrading must not start consuming real events.
+    modernEvents: {
+      enabled: raw?.modernEvents?.enabled === true,
+      channel: typeof raw?.modernEvents?.channel === 'string' ? raw.modernEvents.channel.trim() : '',
+      to: typeof raw?.modernEvents?.to === 'string' ? raw.modernEvents.to.trim() : '',
+    },
     // 默认 prod URL；改这里时 scripts/snapshot-capabilities.mjs 的 PLATFORM_BASE_URL 也要同步改。
     platformBaseUrl: raw?.platformBaseUrl?.trim() || 'https://hi.hirey.ai',
     profile: raw?.profile?.trim() || 'openclaw-main',
