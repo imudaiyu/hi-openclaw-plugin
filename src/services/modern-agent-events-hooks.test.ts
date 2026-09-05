@@ -57,5 +57,24 @@ test('modern hook uses fixed local route, stable idempotency and strict acceptan
       runtime: { hooks_token: 'local-test', hooks_path: '/hooks', gateway_port: 1234 },
       route: { channel: 'test-channel' }, signal: new AbortController().signal, event: {},
     }), false);
+    assert.equal(await __testing_deliverModernEventToHooks({
+      runtime: { hooks_token: 'local-test', hooks_path: '/hooks', gateway_port: 1234 },
+      route: { channel: 'webchat', to: 'main' }, signal: new AbortController().signal, event: {},
+    }), false);
+
+    let localBody: any = null;
+    globalThis.fetch = async (_url, init) => {
+      localBody = JSON.parse(init!.body as string);
+      return Response.json({ ok: true, runId: 'run-local' });
+    };
+    assert.equal(await __testing_deliverModernEventToHooks({
+      runtime: { hooks_token: 'local-test', hooks_path: '/hooks', gateway_port: 1234 },
+      route: { localSession: true }, signal: new AbortController().signal,
+      event: { event_id: 'agev_local', topic: 'test', payload: {} },
+    }), true);
+    assert.equal(localBody.channel, 'last');
+    assert.equal(localBody.to, undefined);
+    assert.equal(localBody.deliver, false);
+    assert.equal(localBody.sessionKey, undefined);
   } finally { globalThis.fetch = original; }
 });

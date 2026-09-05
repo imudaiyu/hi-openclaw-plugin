@@ -44,9 +44,18 @@
             "type": "boolean",
             "default": false
           },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "channel",
+              "local_session"
+            ],
+            "default": "channel",
+            "description": "channel delivers through an installed external channel; local_session creates a Web-visible isolated session with external delivery disabled."
+          },
           "channel": {
             "type": "string",
-            "description": "Explicit local OpenClaw delivery channel."
+            "description": "Explicit installed outbound channel for channel mode. WebChat is not an outbound channel."
           },
           "to": {
             "type": "string",

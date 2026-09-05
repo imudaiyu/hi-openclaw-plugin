@@ -75,6 +75,7 @@ async function main() {
   console.log(`[snapshot-capabilities] fetching ${ENDPOINT}`);
   const resp = await fetch(ENDPOINT, {
     headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(30_000),
   });
   if (!resp.ok) {
     const body = await resp.text().catch(() => '');

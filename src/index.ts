@@ -45,6 +45,7 @@ function defaultedConfig(raw: HiOpenClawPluginConfig | undefined): Required<HiOp
     // Opt-in only. Installing/upgrading must not start consuming real events.
     modernEvents: {
       enabled: raw?.modernEvents?.enabled === true,
+      mode: raw?.modernEvents?.mode === 'local_session' ? 'local_session' : 'channel',
       channel: typeof raw?.modernEvents?.channel === 'string' ? raw.modernEvents.channel.trim() : '',
       to: typeof raw?.modernEvents?.to === 'string' ? raw.modernEvents.to.trim() : '',
     },

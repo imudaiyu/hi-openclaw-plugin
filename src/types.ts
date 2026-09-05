@@ -132,6 +132,7 @@ export type PluginRegisterApi = {
 export type HiOpenClawPluginConfig = {
   modernEvents?: {
     enabled?: boolean;
+    mode?: 'channel' | 'local_session';
     channel?: string;
     to?: string;
   };

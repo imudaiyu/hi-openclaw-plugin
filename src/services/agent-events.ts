@@ -112,14 +112,21 @@ function resolveHooksUrl(rt: DaemonRuntimeConfig): string {
 // Hook acceptance only; this does not attest to model/channel completion.
 export async function __testing_deliverModernEventToHooks(args: {
   runtime: DaemonRuntimeConfig; event: any; signal: AbortSignal;
-  route: { channel?: string; to?: string };
+  route: { channel?: string; to?: string; localSession?: boolean };
 }): Promise<boolean> {
-  if (!args.route.channel?.trim() || !args.route.to?.trim()) return false;
+  const localSession = args.route.localSession === true;
+  if (!localSession && (!args.route.channel?.trim() || !args.route.to?.trim()
+      || args.route.channel.trim().toLowerCase() === 'webchat')) return false;
   const body = buildOpenClawHookPayloadWithRoute({
     event: { ...args.event, reply_route_snapshot: undefined },
-    config: { channel: args.route.channel, to: args.route.to },
+    config: localSession
+      ? { channel: 'last' }
+      : { channel: args.route.channel, to: args.route.to },
   });
   delete body.sessionKey;
+  // WebChat is an internal UI surface, not an outbound channel. This mode
+  // creates a visible isolated session while making external delivery impossible.
+  if (localSession) body.deliver = false;
   const response = await fetch(resolveHooksUrl(args.runtime), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${args.runtime.hooks_token}`,
@@ -317,7 +324,9 @@ export function buildAgentEventsService(
           receiptFile: path.join(stateDir, `${config.profile}.event-receipts.json`),
           ready: async () => {
             const route = config.modernEvents;
-            if (route?.enabled !== true || !route.channel?.trim() || !route.to?.trim()) return null;
+            const localSession = route?.mode === 'local_session';
+            if (route?.enabled !== true || (!localSession && (!route.channel?.trim()
+                || !route.to?.trim() || route.channel.trim().toLowerCase() === 'webchat'))) return null;
             const state = await readState(stateDir, config.profile);
             if (!state.identity?.api_key || state.identity.installation_id) return null;
             runtime = await __testing_readModernHooksConfig();
@@ -330,7 +339,14 @@ export function buildAgentEventsService(
             if (!runtime) return false;
             // Locally configured route is authoritative; never trust event routes
             // or pick the most recent chat for unsolicited background delivery.
-            return __testing_deliverModernEventToHooks({ runtime, event, signal: deliverySignal, route: config.modernEvents });
+            return __testing_deliverModernEventToHooks({
+              runtime, event, signal: deliverySignal,
+              route: {
+                channel: config.modernEvents.channel,
+                to: config.modernEvents.to,
+                localSession: config.modernEvents.mode === 'local_session',
+              },
+            });
           },
           onError: () => logger.warn?.('[hi-openclaw-plugin] modern event receiver will retry'),
         }).catch(() => logger.error?.('[hi-openclaw-plugin] modern event receiver stopped; inspect local receipt storage'));
