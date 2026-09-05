@@ -15,7 +15,7 @@ import {
 import {
   buildAuthorizedClients,
   ensureCredential,
-  fetchPluginReleasePolicy,
+  getStatusPluginReleasePolicy,
   loadStateWithQuarantine,
   peekQuarantineNotice,
 } from '../clients.js';
@@ -101,10 +101,21 @@ function readOpenClawIdentityName(workspaceDir: string): string | null {
   }
 }
 
+// Defense in depth for remote control responses, including nested installation
+// credentials. Claim-export's short-lived claim_token is intentionally supported.
+export function redactControlCredentials(value: unknown): any {
+  if (Array.isArray(value)) return value.map(redactControlCredentials);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) =>
+    !/^(client_secret|api_key|hooks_token|access_token|refresh_token|authorization|password|secret)$/i.test(key),
+  ).map(([key, item]) => [key, redactControlCredentials(item)]));
+}
+
 function asJsonResult(payload: Record<string, unknown>): PluginToolResult {
+  const safe = redactControlCredentials(payload);
   return {
-    structuredContent: payload,
-    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+    structuredContent: safe,
+    content: [{ type: 'text', text: JSON.stringify(safe, null, 2) }],
   };
 }
 
@@ -137,19 +148,7 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
       const args = (params || {}) as { include_remote?: boolean };
       try {
         const state = await loadStateWithQuarantine(stateDir, config.profile, config.platformBaseUrl);
-        let pluginPolicy: Record<string, unknown> | null = null;
-        try {
-          pluginPolicy = await fetchPluginReleasePolicy(config.platformBaseUrl);
-        } catch (err: any) {
-          pluginPolicy = {
-            host: 'openclaw',
-            latest: null,
-            minimum_supported: null,
-            update_required: null,
-            update_recommended: null,
-            error: String(err?.message || err),
-          };
-        }
+        const pluginPolicy = await getStatusPluginReleasePolicy(config.platformBaseUrl, !!args.include_remote);
         const summary = {
           ok: true,
           plugin: 'hi-openclaw-plugin',
@@ -171,7 +170,29 @@ export function buildHiAgentStatusTool(config: Required<HiOpenClawPluginConfig>)
             agent_id: state.identity?.agent_id || null,
             installation_id: state.identity?.installation_id || null,
           },
-          state,
+          // Allowlist the diagnostic state; never serialize persisted identity or
+          // arbitrary future state fields into the model's context.
+          state: {
+            profile: state.profile,
+            identity: state.identity ? {
+              agent_id: state.identity.agent_id,
+              installation_id: state.identity.installation_id,
+              anonymous: state.identity.anonymous,
+              activated_at: state.identity.activated_at,
+              plugin_version_synced: state.identity.plugin_version_synced,
+            } : null,
+            runtime: {
+              last_consumed_stream_seq: state.runtime.last_consumed_stream_seq,
+              updated_at: state.runtime.updated_at,
+              install: {
+                host_kind: state.runtime.install.host_kind,
+                receiver_last_started_at: state.runtime.install.receiver_last_started_at,
+                receiver_has_error: !!state.runtime.install.receiver_last_error,
+                hooks_configured: !!state.runtime.install.hooks_token,
+                gateway_port: state.runtime.install.gateway_port,
+              },
+            },
+          },
           remote: null as Record<string, unknown> | null,
         };
         if (args.include_remote && state.identity) {
@@ -464,7 +485,12 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
           installation: installationUpdate,
           installation_update_error: installationUpdateError,
           subscriptions: subscriptionsResp,
-          hooks_configure: hooksConfigure,
+          hooks_configure: hooksConfigure ? {
+            hooks_path: hooksConfigure.hooks_path,
+            gateway_port: hooksConfigure.gateway_port,
+            changed: hooksConfigure.changed,
+            configured: true,
+          } : null,
           hooks_configure_error: hooksConfigureError,
           // 这台 OpenClaw 现在有一个稳定 agent，重启/开新窗口都是同一个，不会再新建。
           // 读/搜索已可用；写操作（建档/发listing/联系人/约meeting）若还没绑定身份，会被平台

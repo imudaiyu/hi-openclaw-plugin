@@ -45,6 +45,42 @@ export type HiPluginReleasePolicy = {
 
 const PLUGIN_POLICY_TIMEOUT_MS = 5_000;
 
+const policyCache = new Map<string, { policy: HiPluginReleasePolicy | null; checkedAt: number; failed?: boolean; pending?: Promise<void> }>();
+const POLICY_CACHE_TTL_MS = 60_000;
+
+// Local status must remain local-speed. Refresh in the background, sharing one
+// bounded request per origin; explicit remote checks wait for that same request.
+export async function getStatusPluginReleasePolicy(platformBaseUrl: string, waitForRemote = false): Promise<Record<string, unknown>> {
+  const key = platformBaseUrl.replace(/\/+$/, '');
+  let entry = policyCache.get(key);
+  if (!entry) {
+    if (policyCache.size >= 64) policyCache.delete(policyCache.keys().next().value!);
+    entry = { policy: null, checkedAt: 0 };
+    policyCache.set(key, entry);
+  }
+  if (!entry.pending && (waitForRemote || Date.now() - entry.checkedAt >= POLICY_CACHE_TTL_MS)) {
+    const current = entry;
+    current.pending = fetchPluginReleasePolicy(key).then(policy => {
+      current.policy = policy;
+      current.checkedAt = Date.now();
+      current.failed = false;
+    }).catch(() => {
+      // A temporary outage must not erase a known mandatory upgrade. Preserve
+      // the last policy and explicitly mark it stale until a successful refresh.
+      current.failed = true;
+      current.checkedAt = Date.now();
+    }).finally(() => { current.pending = undefined; });
+  }
+  if (waitForRemote) await entry.pending;
+  return {
+    host: 'openclaw', latest: null, minimum_supported: null,
+    update_required: null, update_recommended: null,
+    ...entry.policy,
+    checked_at: entry.checkedAt ? new Date(entry.checkedAt).toISOString() : null,
+    check_status: entry.pending ? 'refreshing' : entry.failed && entry.policy ? 'stale' : entry.policy ? 'checked' : 'unavailable',
+  };
+}
+
 export async function fetchPluginReleasePolicy(
   platformBaseUrl: string,
   timeoutMs: number = PLUGIN_POLICY_TIMEOUT_MS,
