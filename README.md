@@ -41,6 +41,12 @@ Business logic (`@hirey-ai/agent-sdk`, `@hirey-ai/agent-contracts`) is fully sha
 
 ## Status and updates
 
+Local candidate 1.0.75 bootstraps through `POST /v1/agents/api-keys`, then exchanges the same stored credential at the discovered `/oauth/token`. Pending access permits public People reads and staged Capture; private reads and writes require verified identity. Modern `/me` returns flat Agent/Person/Workspace/session fields. Legacy installation and SSE delivery are not asserted ready: modern candidates currently report `push_ready:false` and do not configure hooks automatically.
+
+Registration is not server-idempotent. Before sending the request the plugin writes an exclusive, non-secret `*.registration-pending.json` marker. If a request times out or returns an ambiguous/invalid response, the marker prevents automatic second registration even after restart. Recover the existing credential; do not delete the marker to retry blindly. Existing credentials always take precedence. Non-empty custom registration metadata (including channel attribution) is rejected because this endpoint does not support it.
+
+For link-mode development, run both `npm run build` and `npm run snapshot` before loading the plugin. Build alone clears the generated capability snapshot; published packages run both through `prepack`.
+
 `hi_agent_status` reports both the installed package version and Hi's host-specific `plugin_policy`. Version 1.0.75 aligns the published tool snapshot and Skills with the canonical `workspace_workflows` surface, and separates a required/recommended plugin update from credential recovery and permission errors. When `update_required=true`, use the returned `openclaw plugins update hirey` command and restart OpenClaw. A 401 repairs the existing credential, while a 403 must not trigger reset or a replacement Agent. Anonymous public People reads remain available before verified owner binding.
 
 ## Install

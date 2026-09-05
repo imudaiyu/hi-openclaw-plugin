@@ -22,6 +22,8 @@ import {
   type StaleIdentityQuarantine,
 } from './state.js';
 import { PLUGIN_VERSION } from './version.js';
+import { bootstrapPendingAgent } from './bootstrap.js';
+import {createHash} from 'node:crypto';
 
 export type HiAuthorizedClients = {
   state: HiPersistedState;
@@ -30,6 +32,7 @@ export type HiAuthorizedClients = {
   platform: HiAgentPlatformClient;
   wellKnown: HiAgentPlatformWellKnown;
   quarantined: StaleIdentityQuarantine | null;
+  expiresAt?: number;
 };
 
 export type HiPluginReleasePolicy = {
@@ -174,37 +177,29 @@ export async function ensureCredential(args: {
     // 拿到 slot 后再读一次：可能上一个并发请求刚注册完。
     const recheck = await readState(args.stateDir, args.profile);
     if (recheck.identity) return recheck;
-    const pub = await buildPublicClients(args.platformBaseUrl);
     const callerMetadata =
       args.metadata && typeof args.metadata === 'object' && !Array.isArray(args.metadata) ? args.metadata : {};
-    const reg = await pub.gateway.register({
-      display_name: args.displayName?.trim() || 'OpenClaw Hi Agent',
-      agent_kind: 'external',
-      capabilities: [],
-      metadata: {
-        ...callerMetadata,
-        host: 'openclaw',
-        plugin: 'hi-openclaw-plugin',
-        plugin_version: PLUGIN_VERSION,
-      },
+    const reg = await bootstrapPendingAgent({
+      ...args,
+      metadata: callerMetadata,
     });
     const identity: HiIdentityState = {
-      agent_id: reg.agent.agent_id,
-      installation_id: reg.installation.installation_id,
-      display_name: reg.agent.display_name,
-      agent_kind: reg.agent.agent_kind,
-      client_id: reg.auth.client_id,
-      client_secret: reg.auth.client_secret,
-      installation_subject: reg.auth.installation_subject ?? reg.installation.installation_id,
-      issuer: reg.auth.issuer,
-      audience: reg.auth.audience,
-      token_url: reg.auth.token_url,
-      jwks_url: reg.auth.jwks_url,
+      agent_id: reg.agentId,
+      installation_id: '',
+      display_name: args.displayName?.trim() || 'OpenClaw Hi Agent',
+      agent_kind: 'external',
+      client_id: reg.clientId,
+      client_secret: reg.clientSecret,
+      installation_subject: reg.clientId,
+      issuer: new URL(reg.tokenUrl).origin,
+      audience: '',
+      token_url: reg.tokenUrl,
+      jwks_url: reg.jwksUrl,
       activated_at: null,
       delivery_capabilities: null,
       plugin_version_synced: null,
-      anonymous: false,
-      api_key: null,
+      anonymous: true,
+      api_key: reg.apiKey,
     };
     const next = await updateState(args.stateDir, args.profile, (cur) => ({
       ...cur,
@@ -222,7 +217,30 @@ export async function ensureCredential(args: {
   return p;
 }
 
-export async function buildAuthorizedClients(args: {
+const authorizedCache = new Map<string, {value?: HiAuthorizedClients; pending?: Promise<HiAuthorizedClients>}>();
+export function invalidateAuthorizedClients(stateDir: string, profile: string) {
+  const prefix = `${stateDir}|${profile}|`;
+  for (const key of authorizedCache.keys()) if (key.startsWith(prefix)) authorizedCache.delete(key);
+}
+
+export async function buildAuthorizedClients(args: {stateDir: string; profile: string; platformBaseUrl: string}): Promise<HiAuthorizedClients> {
+  const state = await ensureCredential(args);
+  const fingerprint = createHash('sha256').update(`${state.identity?.client_id}|${state.identity?.client_secret}`).digest('hex');
+  const key = `${args.stateDir}|${args.profile}|${args.platformBaseUrl}|${fingerprint}`;
+  let entry = authorizedCache.get(key);
+  if (entry?.pending) return entry.pending;
+  if (entry?.value && (entry.value.expiresAt || 0) > Date.now()) return entry.value;
+  if (!entry) {
+    if (authorizedCache.size >= 64) authorizedCache.delete(authorizedCache.keys().next().value!);
+    entry = {}; authorizedCache.set(key, entry);
+  }
+  const current = entry;
+  current.pending = buildAuthorizedClientsUncached(args).then(value => {current.value = value; return value;})
+    .finally(() => {current.pending = undefined;});
+  return current.pending;
+}
+
+async function buildAuthorizedClientsUncached(args: {
   stateDir: string;
   profile: string;
   platformBaseUrl: string;
@@ -235,10 +253,12 @@ export async function buildAuthorizedClients(args: {
   }
   let token;
   try {
+    const deadline = AbortSignal.timeout(15_000);
     token = await exchangeHiAgentClientCredentialsToken({
       tokenUrl: state.identity.token_url,
       clientId: state.identity.client_id,
       clientSecret: state.identity.client_secret,
+      fetchImpl: (input, init) => fetch(input, {...init, signal: deadline}),
     });
   } catch (err) {
     // 关键反 churn 改动：OAuth 失败**不再 auto-quarantine + 重注册**（那正是 openclaw 满天飞
@@ -256,6 +276,12 @@ export async function buildAuthorizedClients(args: {
   const clients = await createHiAgentClients({
     platformBaseUrl: args.platformBaseUrl,
     token: token.access_token,
+    fetchImpl: (input, init) => {
+      const headers = new Headers(init?.headers);
+      headers.set('x-hirey-plugin-host', 'openclaw');
+      headers.set('x-hirey-plugin-version', PLUGIN_VERSION);
+      return fetch(input, {...init, headers, signal: AbortSignal.timeout(15_000)});
+    },
   });
   return {
     state,
@@ -264,6 +290,8 @@ export async function buildAuthorizedClients(args: {
     platform: clients.platform,
     wellKnown: clients.wellKnown,
     quarantined: peekQuarantineNotice(),
+    expiresAt: Date.now() + Math.min(token.access_token.startsWith('hi_ai_') ? 10_000 : 60_000,
+      Math.max(0, Number(token.expires_in || 0) * 1000 - 30_000)),
   };
 }
 

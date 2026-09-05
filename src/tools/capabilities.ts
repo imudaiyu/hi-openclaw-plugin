@@ -38,7 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
 import type { PluginToolDefinition, PluginToolResult, HiOpenClawPluginConfig, PluginToolContext } from '../types.js';
-import { buildAuthorizedClients } from '../clients.js';
+import { buildAuthorizedClients, invalidateAuthorizedClients } from '../clients.js';
 import { resolveStateDir } from '../state.js';
 import { buildErrorDetailFields } from '../utils/error-detail.js';
 import type { PublicAgentCapability } from '@hirey/hi-agent-sdk';
@@ -190,8 +190,14 @@ function buildCapabilityTool(
           spec.capability_id,
           enrichedParams,
         );
+        const binding = result as any;
+        if (['google_link','email_binding','phone_binding'].includes(spec.tool_name)
+          && [binding?.status, binding?.data?.status, binding?.result?.status].includes('verified')) {
+          invalidateAuthorizedClients(stateDir, config.profile);
+        }
         return asJsonResult({ ok: true, ...(result as Record<string, unknown>), capability_id: spec.capability_id });
       } catch (err: any) {
+        if (err?.status === 401) invalidateAuthorizedClients(stateDir, config.profile);
         // 写操作 gate：匿名调用写类 capability 命中平台 phone_binding_required 一类身份门禁
         // 时，回 Google 优先的绑定引导（让 LLM 绑定再重试），而不是当成普通失败。这是
         // anonymous-first 下的预期分叉。读/搜索匿名放行，不会走到这里。

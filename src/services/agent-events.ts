@@ -273,6 +273,10 @@ export function buildAgentEventsService(
       }> => {
         const state = await readState(stateDir, config.profile);
         if (!state.identity) return { auth: null, rt: null };
+        // Modern API-key registration has no legacy installation/delivery
+        // declaration. Do not mutate hooks or start the retired SSE path until
+        // a supported native delivery setup has been explicitly implemented.
+        if (state.identity.api_key && !state.identity.installation_id) return { auth: null, rt: null };
         let inst = state.runtime?.install;
         if (!inst?.hooks_token || !inst?.hooks_path || !inst?.gateway_port) {
           // 自愈：identity 存在但 hooks 未配置时（hi_agent_install 在旧版本运行、或 state
