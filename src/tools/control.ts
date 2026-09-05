@@ -1,4 +1,4 @@
-// 4 个核心 control tools：hi_agent_status / hi_agent_install / hi_agent_doctor / hi_agent_reset。
+// 9 个本地 control tools：安装、状态、诊断、恢复、事件和身份收敛。
 // 业务逻辑全部委托给 @hirey/hi-agent-sdk 已封装好的 platform/gateway client，本文件只做：
 // - input schema 定义
 // - state file 持久化跟 OAuth client 装配
@@ -10,7 +10,6 @@ import {
   INSTALL_WELCOME_ONBOARDING_KIND,
   INSTALL_WELCOME_ONBOARDING_INSTRUCTION,
   DEFAULT_INTENT_OPTIONS,
-  type RecentActivityItem,
   type BootstrapOnboardingPayload,
 } from '@hirey/hi-agent-contracts';
 import {
@@ -418,63 +417,27 @@ export function buildHiAgentInstallTool(config: Required<HiOpenClawPluginConfig>
 
         // Step 6: post-install welcome onboarding。
         //
-        // 跟 hi-mcp-server handleInstall 完全镜像设计——native plugin 用户**没有**装任何
-        // hi 相关的 SKILL.md（OpenClaw 5.2+ 走 native plugin 路径），所以平台必须把
-        // onboarding 行为规则**直接塞进 install 工具 result**，让 LLM 不依赖外部 SKILL
-        // 也能跑 welcome 流程。这是覆盖 native plugin 主流路径的唯一同步入口。
+        // 跟 hi-mcp-server handleInstall 镜像：即使 host 未加载随包 Skills，安装结果
+        // 也要自带 onboarding 行为规则，让 welcome 流程不依赖另一个文件或请求。
         //
         // 业界 SaaS / 对话式 AI onboarding 共识（Build context, Ask intent EARLY, Show
         // populated state preview, Single clear next action）+ 我们 prod 数据观察（10 个
         // 新装 owner 里只有一半发了 friendship listing，剩下一半实际意图是招聘 / 找房 /
         // 合伙人）共同推出的引导设计。
         //
-        // 同步路径覆盖**新装**用户；**存量**用户由 platform 端 bootstrapOnboardingFanOut
-        // Worker 异步覆盖；两路 dedup 信号是 owner listing 状态（push instruction 里明确
-        // 要求收到时先调 agent_listings.list，listings.length>0 就 silently consume）。
-        //
-        // 失败 fail-soft：拉 recent_activity 的 capability 调用任何环节失败都不影响
-        // install 主流程返回 ok（welcome 是 instruction + intent_options 为核心，
-        // recent_activity 只是 populated state 增强）。welcome.recent_activity_error
-        // 字段把失败原因留给 LLM 知道。
-        let welcome:
-          | (BootstrapOnboardingPayload & { recent_activity_error?: string })
-          | null = null;
+        // 不再为欢迎卡片额外调用已下线的 hi.agent-listings/browse_recent。这个
+        // 预览不是安装成功的必要结果，额外网络请求还会拉长首次响应。新版只返回
+        // onboarding 指令和意图选项；真正的业务读写由 workspace_workflows 一次返回。
+        let welcome: BootstrapOnboardingPayload | null = null;
         try {
-          // 仅在 install 主链没出错且 hooks 配好时跑 welcome。pending Agent 已可调用
-          // 匿名公开 browse_recent；身份绑定只在私人读取或写入时需要。
+          // 仅在 install 主链没出错且 hooks 配好时返回 welcome。
           const installOk = !installationUpdateError && !hooksConfigureError;
           if (installOk) {
-            let recentActivity: RecentActivityItem[] = [];
-            let recentActivityError: string | null = null;
-            try {
-              const callResult = (await auth.platform.callCapability('hi.agent-listings', {
-                action: 'browse_recent',
-                limit: 8,
-              })) as { ok?: boolean; result?: { items?: unknown } } | undefined;
-              const items = (callResult?.result as any)?.items;
-              if (Array.isArray(items)) {
-                recentActivity = items
-                  .filter((it: any) => it && typeof it === 'object')
-                  .map((it: any) => ({
-                    listing_id: String(it.listing_id || ''),
-                    listing_type_id: String(it.listing_type_id || ''),
-                    published_by_agent_id: String(it.published_by_agent_id || ''),
-                    target_preview_text: String(it.target_preview_text || ''),
-                    listing_created_at: String(it.listing_created_at || ''),
-                  }))
-                  .filter((it: RecentActivityItem) => it.listing_id && it.target_preview_text);
-              } else {
-                recentActivityError = 'browse_recent_returned_no_items_array';
-              }
-            } catch (err: any) {
-              recentActivityError = String(err?.message || err || 'browse_recent_failed').slice(0, 240);
-            }
             welcome = {
               kind: INSTALL_WELCOME_ONBOARDING_KIND,
               instruction_to_llm: INSTALL_WELCOME_ONBOARDING_INSTRUCTION,
-              recent_activity: recentActivity,
+              recent_activity: [],
               intent_options: [...DEFAULT_INTENT_OPTIONS],
-              ...(recentActivityError ? { recent_activity_error: recentActivityError } : {}),
             };
           }
         } catch {

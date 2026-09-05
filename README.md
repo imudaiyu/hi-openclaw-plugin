@@ -41,7 +41,7 @@ Business logic (`@hirey-ai/agent-sdk`, `@hirey-ai/agent-contracts`) is fully sha
 
 ## Status and updates
 
-`hi_agent_status` reports both the installed package version and Hi's host-specific `plugin_policy`. Version 1.0.74 and newer separates a required/recommended plugin update from credential recovery and permission errors. Use the returned OpenClaw update command; a 401 repairs the existing credential, while a 403 must not trigger reset or a replacement Agent. Anonymous public People/Listing reads remain available before verified owner binding.
+`hi_agent_status` reports both the installed package version and Hi's host-specific `plugin_policy`. Version 1.0.75 aligns the published tool snapshot and Skills with the canonical `workspace_workflows` surface, and separates a required/recommended plugin update from credential recovery and permission errors. When `update_required=true`, use the returned `openclaw plugins update hirey` command and restart OpenClaw. A 401 repairs the existing credential, while a 403 must not trigger reset or a replacement Agent. Anonymous public People reads remain available before verified owner binding.
 
 ## Install
 

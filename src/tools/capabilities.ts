@@ -5,7 +5,7 @@
 // schema 来源（1.0.20 起）：build-time snapshot。
 //
 // scripts/snapshot-capabilities.mjs 在 npm publish / npm pack / clawhub publish 之前会
-// 一次性 fetch prod https://hi.hirey.ai/v1/capabilities，把 14 个（未来 N 个）
+// 一次性 fetch prod https://hi.hirey.ai/v1/capabilities，把当前全量
 // PublicAgentCapability 的完整 input schema 写到 dist/capabilities.snapshot.json。
 // register 阶段同步 readFileSync 加载这份 snapshot，原样作为 OpenClaw registerTool 的
 // parameters。这样：
@@ -21,7 +21,7 @@
 //     listing_id 之类参数静默丢掉，让平台收到空 args 后回 "unsupported action"
 //
 // 历史：
-//   1.0.0 ~ 1.0.15：hardcoded 14 个 CapabilitySpec + bare additionalProperties:true schema。
+//   1.0.0 ~ 1.0.15：hardcoded 旧 CapabilitySpec + bare additionalProperties:true schema。
 //     OpenAI strict mode 把 properties 静默剥光，调用方传 action 字段被丢，平台 422
 //     unsupported action（线上 repro：listing_taxonomy(action="list_types") /
 //     agent_listings(action="upsert"))。

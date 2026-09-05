@@ -1,4 +1,4 @@
-// hi-openclaw-plugin entry: register Hirey AI 的 control tools + 14 platform capabilities +
+// hi-openclaw-plugin entry: register Hirey AI 的 control tools + 发布时快照中的 platform capabilities +
 // agent-events claim service + webhook ingress route 进 OpenClaw gateway 进程。
 //
 // 设计原则：
