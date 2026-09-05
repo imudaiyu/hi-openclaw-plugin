@@ -17,4 +17,3 @@ credentials, or private message bodies beyond what the user requested.
 
 Before interpreting failures, read `hi_agent_status.plugin_policy`: a required OpenClaw upgrade,
 a 401 credential failure, and a 403 permission failure have different remedies.
-

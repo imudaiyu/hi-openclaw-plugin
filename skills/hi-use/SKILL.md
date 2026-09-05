@@ -26,4 +26,3 @@ Always distinguish a required plugin upgrade from authentication and authorizati
   `openclaw`, restart OpenClaw when requested, then retry once in a fresh session.
 - `401`: repair the existing credential; do not create a replacement Agent.
 - `403`: the credential is valid but lacks identity or permission; do not reset it.
-

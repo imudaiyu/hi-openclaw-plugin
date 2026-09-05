@@ -19,4 +19,3 @@ Use only the Product Signal and Repair Case operations currently returned by
    the repaired behavior.
 
 Do not infer production success from a passing local test, merged PR, or successful deployment job.
-
